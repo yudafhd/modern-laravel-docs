@@ -49,9 +49,8 @@ function Sidebar({ groups, selectedId, onSelect, search, onSearch, operationCoun
     return (
         <aside className="sidebar">
             <div className="brand">
-                <span className="brand__mark">IHC</span>
                 <div>
-                    <strong>Larafeel</strong>
+                    <div className="brand__title">Larafeel</div>
                     <span>v{version}</span>
                 </div>
                 <button className="sidebar-toggle sidebar-toggle--close" type="button" onClick={onClose} aria-label="Tutup sidebar">
@@ -196,7 +195,7 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                 <MethodBadge method={operation.method} />
                 <input
                     aria-label="Base URL"
-                    value={request.baseUrl}
+                    value={request.baseUrl+operation.path}
                     onChange={(event) => onChange({ ...request, baseUrl: event.target.value })}
                 />
                 <button type="button" onClick={onSend} disabled={sending}>
@@ -848,7 +847,6 @@ function ApiDocumentation() {
     if (!specification) {
         return (
             <main className="docs-loading">
-                <span>IHC</span>
                 <p>
                     <strong className="loading-text">Sedang Menyiapkan</strong>
                     <span className="loading-dots" aria-hidden="true">

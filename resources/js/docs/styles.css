@@ -65,19 +65,9 @@ button {
     border-bottom: 1px solid #e1e8ea;
 }
 
-.brand__mark,
-.docs-loading > span {
-    width: 2.25rem;
-    height: 2.25rem;
-    display: grid;
-    place-items: center;
-    flex: 0 0 auto;
-    border-radius: 0.65rem;
-    color: #fff;
-    background: linear-gradient(145deg, #138176, #0b615a);
-    box-shadow: 0 0.4rem 1rem rgb(15 118 110 / 18%);
-    font-size: 0.72rem;
-    font-weight: 850;
+.brand__title {
+    color: #0b615a;
+    font-size: 1.75rem;
 }
 
 .brand div {
