@@ -148,7 +148,43 @@ export function createInitialRequest(operation, baseUrl) {
     const contentType = operation.contentTypes.includes('application/json')
         ? 'application/json'
         : operation.contentTypes[0] ?? 'application/json';
+
+    // Auto-detect files for multipart/form-data
+    const files = [];
+    if (contentType === 'multipart/form-data' && operation.requestBody) {
+        const content = operation.requestBody.content ?? {};
+        const media = content['multipart/form-data'];
+        if (media && media.schema) {
+            const schema = resolveSchema(operation.specification, media.schema);
+            if (schema && schema.properties) {
+                Object.entries(schema.properties).forEach(([name, property]) => {
+                    const resolvedProp = resolveSchema(operation.specification, property);
+                    if (resolvedProp && (resolvedProp.format === 'binary' || resolvedProp.type === 'file' || (resolvedProp.type === 'string' && resolvedProp.format === 'binary'))) {
+                        files.push({
+                            id: crypto.randomUUID(),
+                            name,
+                            file: null,
+                            enabled: true,
+                            required: schema.required?.includes(name) ?? false,
+                            locked: true,
+                        });
+                    }
+                });
+            }
+        }
+    }
+
     const bodyExample = operation.bodyExamples[contentType];
+    let body = '';
+    if (bodyExample !== undefined && bodyExample !== null) {
+        let cleanExample = structuredClone(bodyExample);
+        if (contentType === 'multipart/form-data' && typeof cleanExample === 'object') {
+            files.forEach((fileField) => {
+                delete cleanExample[fileField.name];
+            });
+        }
+        body = JSON.stringify(cleanExample, null, 2);
+    }
 
     return {
         baseUrl,
@@ -157,10 +193,8 @@ export function createInitialRequest(operation, baseUrl) {
         headers: parameters.filter((item) => item.location === 'header').map((item) => item.row),
         authType: 'bearer',
         contentType,
-        body: bodyExample === undefined || bodyExample === null
-            ? ''
-            : JSON.stringify(bodyExample, null, 2),
-        files: [],
+        body,
+        files,
     };
 }
 

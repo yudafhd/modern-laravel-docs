@@ -51,7 +51,7 @@ function Sidebar({ groups, selectedId, onSelect, search, onSearch, operationCoun
             <div className="brand">
                 <span className="brand__mark">IHC</span>
                 <div>
-                    <strong>IHC ONE</strong>
+                    <strong>Larafeel</strong>
                     <span>v{version}</span>
                 </div>
                 <button className="sidebar-toggle sidebar-toggle--close" type="button" onClick={onClose} aria-label="Tutup sidebar">
