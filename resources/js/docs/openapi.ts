@@ -29,6 +29,7 @@ export interface Operation {
     requestBody: any;
     contentTypes: string[];
     bodyExamples: Record<string, any>;
+    responses?: any;
     specification: any;
 }
 
@@ -41,11 +42,16 @@ export interface RequestState {
     contentType: string;
     body: string;
     files: FileRow[];
+    basicAuthUsername?: string;
+    basicAuthPassword?: string;
+    apiKeyName?: string;
+    apiKeyValue?: string;
+    apiKeyPlacement?: 'header' | 'query';
 }
 
 const supportedMethods = ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'];
 
-function resolveReference(specification: any, value: any): any {
+export function resolveReference(specification: any, value: any): any {
     if (!value?.$ref?.startsWith('#/')) return value;
 
     return value.$ref
@@ -54,7 +60,7 @@ function resolveReference(specification: any, value: any): any {
         .reduce((current: any, segment: string) => current?.[segment.replaceAll('~1', '/').replaceAll('~0', '~')], specification);
 }
 
-function resolveSchema(specification: any, schema: any, depth = 0): any {
+export function resolveSchema(specification: any, schema: any, depth = 0): any {
     if (!schema || depth > 8) return schema;
     const resolved = resolveReference(specification, schema);
 
@@ -156,6 +162,7 @@ export function getOperations(specification: any): Operation[] {
                         ?? schemaExample(specification, media.schema);
                     return [contentType, example];
                 })),
+                responses: operation.responses,
                 specification,
             });
         });
@@ -251,8 +258,16 @@ function parseObjectBody(body: string, label: string): Record<string, any> {
         }
         return parsed;
     } catch {
-        throw new Error(`${label} harus berupa JSON object yang valid.`);
+        throw new Error(`${label} must be a valid JSON object.`);
     }
+}
+
+export function replaceEnvVariables(text: string, env: Record<string, string>): string {
+    if (!text) return text;
+    return text.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
+        const trimmed = key.trim();
+        return env[trimmed] !== undefined ? env[trimmed] : `{{${key}}}`;
+    });
 }
 
 function getCookie(name: string): string | undefined {
@@ -262,30 +277,61 @@ function getCookie(name: string): string | undefined {
         ?.slice(name.length + 1);
 }
 
-export function buildRequest(operation: Operation, request: RequestState, token: string): { url: string; options: RequestInit } {
+export function buildRequest(
+    operation: Operation,
+    request: RequestState,
+    token: string,
+    env: Record<string, string> = {}
+): { url: string; options: RequestInit } {
     const missingPath = request.path.find((row) => row.required && !row.value);
-    if (missingPath) throw new Error(`Path variable "${missingPath.name}" wajib diisi.`);
+    if (missingPath) throw new Error(`Path variable "${missingPath.name}" is required.`);
     const missingQuery = request.query.find((row) => row.required && (!row.enabled || !row.value));
-    if (missingQuery) throw new Error(`Query parameter "${missingQuery.name}" wajib diisi.`);
+    if (missingQuery) throw new Error(`Query parameter "${missingQuery.name}" is required.`);
 
     let path = operation.path;
     request.path.filter((row) => row.enabled).forEach((row) => {
-        path = path.replace(`{${row.name}}`, encodeURIComponent(row.value));
+        const resolvedValue = replaceEnvVariables(row.value, env);
+        path = path.replace(`{${row.name}}`, encodeURIComponent(resolvedValue));
     });
 
-    const baseUrl = request.baseUrl.replace(/\/$/, '');
+    const baseUrl = replaceEnvVariables(request.baseUrl, env).replace(/\/$/, '');
     const url = new URL(`${baseUrl}${path.startsWith('/') ? path : `/${path}`}`);
     request.query.filter((row) => row.enabled && row.name).forEach((row) => {
-        url.searchParams.append(row.name, row.value);
+        const resolvedName = replaceEnvVariables(row.name, env);
+        const resolvedValue = replaceEnvVariables(row.value, env);
+        url.searchParams.append(resolvedName, resolvedValue);
     });
 
     const headers = new Headers({ Accept: 'application/json' });
     request.headers.filter((row) => row.enabled && row.name).forEach((row) => {
-        headers.set(row.name, row.value);
+        const resolvedName = replaceEnvVariables(row.name, env);
+        const resolvedValue = replaceEnvVariables(row.value, env);
+        headers.set(resolvedName, resolvedValue);
     });
+
     if (request.authType === 'bearer' && token.trim()) {
-        headers.set('Authorization', token.trim().toLowerCase().startsWith('bearer ') ? token.trim() : `Bearer ${token.trim()}`);
+        const resolvedToken = replaceEnvVariables(token.trim(), env);
+        headers.set('Authorization', resolvedToken.toLowerCase().startsWith('bearer ') ? resolvedToken : `Bearer ${resolvedToken}`);
+    } else if (request.authType === 'basic') {
+        const u = replaceEnvVariables(request.basicAuthUsername || '', env);
+        const p = replaceEnvVariables(request.basicAuthPassword || '', env);
+        let credentials = '';
+        try {
+            credentials = btoa(unescape(encodeURIComponent(`${u}:${p}`)));
+        } catch {
+            credentials = btoa(`${u}:${p}`);
+        }
+        headers.set('Authorization', `Basic ${credentials}`);
+    } else if (request.authType === 'apikey' && request.apiKeyName) {
+        const name = replaceEnvVariables(request.apiKeyName, env);
+        const val = replaceEnvVariables(request.apiKeyValue || '', env);
+        if (request.apiKeyPlacement === 'query') {
+            url.searchParams.append(name, val);
+        } else {
+            headers.set(name, val);
+        }
     }
+
     const xsrfToken = getCookie('XSRF-TOKEN');
     if (xsrfToken) {
         headers.set('X-XSRF-TOKEN', decodeURIComponent(xsrfToken));
@@ -298,10 +344,11 @@ export function buildRequest(operation: Operation, request: RequestState, token:
     };
 
     if (!['GET', 'HEAD'].includes(operation.method)) {
+        const resolvedBody = replaceEnvVariables(request.body, env);
         if (request.contentType === 'multipart/form-data') {
             const data = new FormData();
-            if (request.body.trim()) {
-                Object.entries(parseObjectBody(request.body, 'Multipart body')).forEach(([name, value]) => {
+            if (resolvedBody.trim()) {
+                Object.entries(parseObjectBody(resolvedBody, 'Multipart body')).forEach(([name, value]) => {
                     data.append(name, typeof value === 'object' ? JSON.stringify(value) : String(value));
                 });
             }
@@ -313,17 +360,17 @@ export function buildRequest(operation: Operation, request: RequestState, token:
                 });
             }
             options.body = data;
-        } else if (request.contentType === 'application/x-www-form-urlencoded' && request.body.trim()) {
+        } else if (request.contentType === 'application/x-www-form-urlencoded' && resolvedBody.trim()) {
             const data = new URLSearchParams();
-            Object.entries(parseObjectBody(request.body, 'Form body')).forEach(([name, value]) => {
+            Object.entries(parseObjectBody(resolvedBody, 'Form body')).forEach(([name, value]) => {
                 data.append(name, typeof value === 'object' ? JSON.stringify(value) : String(value));
             });
             headers.set('Content-Type', request.contentType);
             options.body = data;
         } else {
             headers.set('Content-Type', request.contentType);
-            if (request.contentType.includes('json') && request.body.trim()) JSON.parse(request.body);
-            options.body = request.body;
+            if (request.contentType.includes('json') && resolvedBody.trim()) JSON.parse(resolvedBody);
+            options.body = resolvedBody;
         }
     }
 
@@ -357,4 +404,111 @@ export function parseResponseBody(value: string, contentType: string = ''): { te
 
 export function getResponseHeaders(headers: Headers): [string, string][] {
     return [...headers.entries()].sort(([left], [right]) => left.localeCompare(right));
+}
+
+export function generateSnippet(language: string, url: string, options: any, contentType: string): string {
+    const method = options.method || 'GET';
+    const headersObj: Record<string, string> = {};
+    if (options.headers) {
+        options.headers.forEach((value: string, key: string) => {
+            headersObj[key] = value;
+        });
+    }
+
+    let bodyStr = '';
+    let isJson = contentType.includes('json');
+
+    if (options.body) {
+        if (options.body instanceof FormData) {
+            bodyStr = '[FormData]';
+        } else if (options.body instanceof URLSearchParams) {
+            bodyStr = options.body.toString();
+        } else {
+            bodyStr = String(options.body);
+        }
+    }
+
+    switch (language) {
+        case 'curl': {
+            const headersPart = Object.entries(headersObj)
+                .map(([key, value]) => `  -H "${key}: ${value}"`)
+                .join(' \\\n');
+            let bodyPart = '';
+            if (options.body) {
+                if (options.body instanceof FormData) {
+                    bodyPart = ' \\\n  # Form data fields (binary / upload files)';
+                } else {
+                    bodyPart = ` \\\n  -d '${bodyStr.replace(/'/g, "'\\''")}'`;
+                }
+            }
+            return `curl -X ${method} "${url}"${headersPart ? ' \\\n' + headersPart : ''}${bodyPart}`;
+        }
+        case 'javascript': {
+            const headersStr = JSON.stringify(headersObj, null, 4);
+            let bodyPart = '';
+            if (options.body) {
+                if (options.body instanceof FormData) {
+                    bodyPart = ',\n    body: formData // Append your files and fields';
+                } else if (isJson) {
+                    bodyPart = `,\n    body: JSON.stringify(${bodyStr})`;
+                } else {
+                    bodyPart = `,\n    body: ${JSON.stringify(bodyStr)}`;
+                }
+            }
+            return `fetch("${url}", {
+    method: "${method}",
+    headers: ${headersStr}${bodyPart}
+})
+.then(response => response.json())
+.then(data => console.log(data))
+.catch(error => console.error(error));`;
+        }
+        case 'python': {
+            const headersStr = JSON.stringify(headersObj, null, 4);
+            let bodyPart = '';
+            if (options.body) {
+                if (options.body instanceof FormData) {
+                    bodyPart = ',\n    files=files # define your files dict';
+                } else if (isJson) {
+                    bodyPart = `,\n    json=${bodyStr}`;
+                } else {
+                    bodyPart = `,\n    data=${JSON.stringify(bodyStr)}`;
+                }
+            }
+            return `import requests
+
+url = "${url}"
+headers = ${headersStr}
+
+response = requests.request("${method}", url, headers=headers${bodyPart})
+print(response.status_code)
+print(response.text)`;
+        }
+        case 'php': {
+            const headersPart = Object.entries(headersObj)
+                .map(([key, value]) => `        '${key}' => '${value}'`)
+                .join(',\n');
+            let bodyPart = '';
+            if (options.body) {
+                if (options.body instanceof FormData) {
+                    bodyPart = `,\n    'multipart' => [ /* your file array */ ]`;
+                } else if (isJson) {
+                    bodyPart = `,\n    'json' => json_decode('${bodyStr.replace(/'/g, "\\'")}', true)`;
+                } else {
+                    bodyPart = `,\n    'body' => '${bodyStr.replace(/'/g, "\\'")}'`;
+                }
+            }
+            return `$client = new \\GuzzleHttp\\Client();
+
+$response = $client->request('${method}', '${url}', [
+    'headers' => [
+${headersPart}
+    ]${bodyPart}
+]);
+
+echo $response->getBody();`;
+        }
+        default:
+            return '';
+    }
 }

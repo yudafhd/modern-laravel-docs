@@ -12,7 +12,10 @@ import {
     parseResponseBody,
     Operation,
     RequestRow,
-    RequestState
+    RequestState,
+    resolveSchema,
+    resolveReference,
+    generateSnippet
 } from './openapi';
 import './styles.css';
 
@@ -58,6 +61,8 @@ interface HistoryItem {
     createdAt: number;
     request: RequestState;
     token: string;
+    cachedResponse?: ResponseState | null;
+    cachedError?: string | null;
 }
 
 function loadHistory(): HistoryItem[] {
@@ -66,6 +71,91 @@ function loadHistory(): HistoryItem[] {
     } catch {
         return [];
     }
+}
+
+interface SchemaNodeProps {
+    name: string;
+    schema: any;
+    specification: any;
+    required?: boolean;
+    depth?: number;
+}
+
+function SchemaNode({ name, schema, specification, required = false, depth = 0 }: SchemaNodeProps) {
+    const resolved = useMemo(() => resolveSchema(specification, schema), [specification, schema]);
+    const [expanded, setExpanded] = useState(true);
+
+    if (!resolved) return null;
+
+    const type = Array.isArray(resolved.type)
+        ? resolved.type.find((t: any) => t !== 'null') || 'string'
+        : resolved.type || 'string';
+
+    const hasChildren = type === 'object' && resolved.properties;
+
+    return (
+        <div className="schema-node" style={{ paddingLeft: depth > 0 ? '1rem' : '0' }}>
+            <div className="schema-node__header">
+                {hasChildren ? (
+                    <button
+                        type="button"
+                        className="schema-node__toggle"
+                        onClick={() => setExpanded(!expanded)}
+                    >
+                        {expanded ? '▼' : '▶'}
+                    </button>
+                ) : (
+                    <span className="schema-node__indent-bullet" />
+                )}
+
+                <span className="schema-node__name">{name || '(root)'}</span>
+                {required && <span className="schema-node__required-asterisk" title="Required">*</span>}
+                <span className={`schema-node__type-badge schema-node__type-badge--${type}`}>
+                    {type}{resolved.format ? ` (${resolved.format})` : ''}
+                </span>
+
+                {resolved.description && (
+                    <span className="schema-node__description">{resolved.description}</span>
+                )}
+            </div>
+
+            {expanded && (
+                <div className="schema-node__children">
+                    {type === 'object' && resolved.properties && (
+                        Object.entries(resolved.properties).map(([propName, propSchema]) => (
+                            <SchemaNode
+                                key={propName}
+                                name={propName}
+                                schema={propSchema}
+                                specification={specification}
+                                required={resolved.required?.includes(propName)}
+                                depth={depth + 1}
+                            />
+                        ))
+                    )}
+                    {type === 'array' && resolved.items && (
+                        <SchemaNode
+                            name="[item]"
+                            schema={resolved.items}
+                            specification={specification}
+                            depth={depth + 1}
+                        />
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function SchemaVisualizer({ schema, specification }: { schema: any; specification: any }) {
+    if (!schema) {
+        return <div className="schema-empty">Data schema is not available.</div>;
+    }
+    return (
+        <div className="schema-visualizer">
+            <SchemaNode name="" schema={schema} specification={specification} />
+        </div>
+    );
 }
 
 function MethodBadge({ method }: { method: string }) {
@@ -91,7 +181,7 @@ function Sidebar({ groups, selectedId, onSelect, search, onSearch, operationCoun
                     <div className="brand__title">Larafeel</div>
                     <span>v{version}</span>
                 </div>
-                <button className="sidebar-toggle sidebar-toggle--close" type="button" onClick={onClose} aria-label="Tutup sidebar">
+                <button className="sidebar-toggle sidebar-toggle--close" type="button" onClick={onClose} aria-label="Close sidebar">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
                         <rect width="18" height="18" x="3" y="3" rx="2" />
                         <path d="M9 3v18" />
@@ -105,11 +195,11 @@ function Sidebar({ groups, selectedId, onSelect, search, onSearch, operationCoun
                 <input
                     value={search}
                     onChange={(event) => onSearch(event.target.value)}
-                    placeholder={`Cari ${operationCount} endpoint`}
+                    placeholder={`Search ${operationCount} endpoint${operationCount === 1 ? '' : 's'}`}
                 />
             </label>
 
-            <nav className="endpoint-nav" aria-label="Daftar endpoint">
+            <nav className="endpoint-nav" aria-label="Endpoints list">
                 {groups.length ? groups.map(([tag, operations]) => (
                     <details className="endpoint-group" key={tag} open={Boolean(search) || operations.some((item) => item.id === selectedId)}>
                         <summary>
@@ -144,7 +234,7 @@ interface KeyValueEditorProps {
     valuePlaceholder?: string;
 }
 
-function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Nilai' }: KeyValueEditorProps) {
+function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Value' }: KeyValueEditorProps) {
     const updateRow = (index: number, field: keyof RequestRow, value: any) => {
         onChange(rows.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row));
     };
@@ -152,7 +242,7 @@ function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Nilai' }: KeyValue
     return (
         <div className="kv-editor">
             <div className="kv-editor__head">
-                <span>Aktif</span>
+                <span>Active</span>
                 <span>Key</span>
                 <span>Value</span>
                 <span />
@@ -160,7 +250,7 @@ function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Nilai' }: KeyValue
             {rows.map((row, index) => (
                 <div className="kv-row" key={row.id}>
                     <input
-                        aria-label={`Aktifkan ${row.name || 'parameter'}`}
+                        aria-label={`Enable ${row.name || 'parameter'}`}
                         type="checkbox"
                         checked={row.enabled}
                         onChange={(event) => updateRow(index, 'enabled', event.target.checked)}
@@ -191,7 +281,7 @@ function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Nilai' }: KeyValue
                     <button
                         className="icon-button"
                         type="button"
-                        aria-label="Hapus baris"
+                        aria-label="Delete row"
                         disabled={row.locked}
                         onClick={() => onChange(rows.filter((_, rowIndex) => rowIndex !== index))}
                     >
@@ -212,7 +302,7 @@ function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Nilai' }: KeyValue
                     example: '',
                 }])}
             >
-                + Tambah baris
+                + Add row
             </button>
         </div>
     );
@@ -226,12 +316,17 @@ interface RequestPanelProps {
     onTokenChange: (token: string) => void;
     onSend: () => void;
     sending: boolean;
+    env: Record<string, string>;
 }
 
-function RequestPanel({ operation, request, onChange, token, onTokenChange, onSend, sending }: RequestPanelProps) {
+function RequestPanel({ operation, request, onChange, token, onTokenChange, onSend, sending, env }: RequestPanelProps) {
     const [tab, setTab] = useState('params');
     const [bodyMode, setBodyMode] = useState('raw');
+    const [snippetLang, setSnippetLang] = useState('curl');
+    const [copiedSnippet, setCopiedSnippet] = useState(false);
+
     const requestBodyAvailable = Boolean(operation.requestBody);
+    const requestSchema = operation.requestBody?.content?.[request.contentType]?.schema;
     const tabCount = {
         params: request.path.length + request.query.length,
         headers: request.headers.length,
@@ -312,8 +407,10 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                 value={request.authType}
                                 onChange={(event) => onChange({ ...request, authType: event.target.value })}
                             >
-                                <option value="bearer">Bearer Token</option>
                                 <option value="none">No Auth</option>
+                                <option value="bearer">Bearer Token</option>
+                                <option value="basic">Basic Auth</option>
+                                <option value="apikey">API Key</option>
                             </select>
                         </label>
                         {request.authType === 'bearer' && (
@@ -326,8 +423,62 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                     rows={5}
                                     spellCheck="false"
                                 />
-                                <small>Token disimpan hanya di localStorage browser ini.</small>
+                                <small>Token is stored only in your browser's localStorage.</small>
                             </label>
+                        )}
+                        {request.authType === 'basic' && (
+                            <div className="auth-basic-fields">
+                                <label>
+                                    <span>Username</span>
+                                    <input
+                                        type="text"
+                                        value={request.basicAuthUsername || ''}
+                                        onChange={(event) => onChange({ ...request, basicAuthUsername: event.target.value })}
+                                        placeholder="Username"
+                                    />
+                                </label>
+                                <label>
+                                    <span>Password</span>
+                                    <input
+                                        type="password"
+                                        value={request.basicAuthPassword || ''}
+                                        onChange={(event) => onChange({ ...request, basicAuthPassword: event.target.value })}
+                                        placeholder="Password"
+                                     />
+                                </label>
+                            </div>
+                        )}
+                        {request.authType === 'apikey' && (
+                            <div className="auth-apikey-fields">
+                                <label>
+                                    <span>Key</span>
+                                    <input
+                                        type="text"
+                                        value={request.apiKeyName || ''}
+                                        onChange={(event) => onChange({ ...request, apiKeyName: event.target.value })}
+                                        placeholder="api_key"
+                                    />
+                                </label>
+                                <label>
+                                    <span>Value</span>
+                                    <input
+                                        type="text"
+                                        value={request.apiKeyValue || ''}
+                                        onChange={(event) => onChange({ ...request, apiKeyValue: event.target.value })}
+                                        placeholder="secret-token-value"
+                                    />
+                                </label>
+                                <label>
+                                    <span>Add to</span>
+                                    <select
+                                        value={request.apiKeyPlacement || 'header'}
+                                        onChange={(event) => onChange({ ...request, apiKeyPlacement: event.target.value as 'header' | 'query' })}
+                                    >
+                                        <option value="header">Header</option>
+                                        <option value="query">Query Params</option>
+                                    </select>
+                                </label>
+                            </div>
                         )}
                     </div>
                 )}
@@ -380,11 +531,24 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                         >
                                             Preview
                                         </button>
+                                        {requestSchema && (
+                                            <button
+                                                type="button"
+                                                className={bodyMode === 'schema' ? 'active' : ''}
+                                                onClick={() => setBodyMode('schema')}
+                                            >
+                                                Schema
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             )}
                         </div>
-                        {bodyMode === 'preview' && request.contentType.includes('json') ? (
+                        {bodyMode === 'schema' && requestSchema ? (
+                            <div className="schema-container">
+                                <SchemaVisualizer schema={requestSchema} specification={operation.specification} />
+                            </div>
+                        ) : bodyMode === 'preview' && request.contentType.includes('json') ? (
                             (() => {
                                 try {
                                     const parsed = JSON.parse(request.body || '{}');
@@ -401,7 +565,7 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                 } catch (e: any) {
                                     return (
                                         <div className="response-body response-body--error" style={{ minHeight: '18rem', borderRadius: '0.55rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                            JSON tidak valid: {e.message}
+                                            Invalid JSON: {e.message}
                                         </div>
                                     );
                                 }
@@ -419,7 +583,7 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                 rows={18}
                                 spellCheck="false"
                                 placeholder={request.contentType === 'multipart/form-data'
-                                    ? 'Gunakan JSON object. Nilai akan dikirim sebagai FormData.'
+                                    ? 'Use a JSON object. Values will be sent as FormData.'
                                     : 'Request body'}
                             />
                         )}
@@ -428,7 +592,7 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                 <h2>File Attachments (Multipart)</h2>
                                 <div className="kv-editor">
                                     <div className="kv-editor__head">
-                                        <span>Aktif</span>
+                                        <span>Active</span>
                                         <span>Field Name</span>
                                         <span>File</span>
                                         <span />
@@ -436,7 +600,7 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                     {(request.files ?? []).map((row, index) => (
                                         <div className="kv-row" key={row.id}>
                                             <input
-                                                aria-label={`Aktifkan file ${row.name || 'field'}`}
+                                                aria-label={`Enable file ${row.name || 'field'}`}
                                                 type="checkbox"
                                                 checked={row.enabled}
                                                 onChange={(event) => {
@@ -469,7 +633,7 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                             <button
                                                 className="icon-button"
                                                 type="button"
-                                                aria-label="Hapus file"
+                                                aria-label="Delete file"
                                                 onClick={() => {
                                                     onChange({
                                                         ...request,
@@ -503,7 +667,7 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                             });
                                         }}
                                     >
-                                        + Tambah File
+                                        + Add File
                                     </button>
                                 </div>
                             </div>
@@ -511,6 +675,40 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                     </div>
                 )}
             </div>
+
+            {(() => {
+                let snippet = '';
+                let errorMsg = '';
+                try {
+                    const prepared = buildRequest(operation, request, token, env);
+                    snippet = generateSnippet(snippetLang, prepared.url, prepared.options, request.contentType);
+                } catch (e: any) {
+                    errorMsg = `// Error: ${e.message}\n// Complete required parameters to generate the code snippet.`;
+                }
+
+                const handleCopy = () => {
+                    navigator.clipboard.writeText(snippet || errorMsg);
+                    setCopiedSnippet(true);
+                    setTimeout(() => setCopiedSnippet(false), 2000);
+                };
+
+                return (
+                    <div className="snippet-box" style={{ marginTop: '1.5rem' }}>
+                        <div className="snippet-box__header">
+                            <select value={snippetLang} onChange={(e) => setSnippetLang(e.target.value)}>
+                                <option value="curl">cURL</option>
+                                <option value="javascript">JavaScript (Fetch)</option>
+                                <option value="python">Python (Requests)</option>
+                                <option value="php">PHP (Guzzle)</option>
+                            </select>
+                            <button type="button" onClick={handleCopy}>
+                                {copiedSnippet ? 'Copied!' : 'Copy'}
+                            </button>
+                        </div>
+                        <pre className="snippet-box__code"><code>{snippet || errorMsg}</code></pre>
+                    </div>
+                );
+            })()}
         </section>
     );
 }
@@ -524,19 +722,57 @@ interface ResponseState {
     headers: [string, string][];
     body: string;
     json: any;
+    contentType: string;
 }
 
 interface ResponsePanelProps {
     response: ResponseState | null;
     error: string | null;
+    operation: Operation | null;
 }
 
-function ResponsePanel({ response, error }: ResponsePanelProps) {
+function ResponsePanel({ response, error, operation }: ResponsePanelProps) {
     const [tab, setTab] = useState('body');
     const [search, setSearch] = useState('');
     const [matches, setMatches] = useState<HTMLElement[]>([]);
     const [activeMatch, setActiveMatch] = useState(0);
+    const [copiedResponse, setCopiedResponse] = useState(false);
     const bodyRef = useRef<any>(null);
+
+    const successResponse = operation?.responses?.[response?.status ?? 200]
+        ?? operation?.responses?.['201']
+        ?? operation?.responses?.default;
+    const successMedia = successResponse
+        ? resolveReference(operation?.specification, successResponse)
+        : null;
+    const responseSchema = successMedia?.content?.['application/json']?.schema
+        ?? successMedia?.content?.['*/*']?.schema;
+
+    const handleCopy = () => {
+        if (!response) return;
+        navigator.clipboard.writeText(response.body);
+        setCopiedResponse(true);
+        setTimeout(() => setCopiedResponse(false), 2000);
+    };
+
+    const handleDownload = () => {
+        if (!response) return;
+        let extension = 'txt';
+        const type = response.contentType.toLowerCase();
+        if (type.includes('json')) extension = 'json';
+        else if (type.includes('html')) extension = 'html';
+        else if (type.includes('xml')) extension = 'xml';
+
+        const blob = new Blob([response.body], { type: response.contentType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `response_${response.status}.${extension}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
 
     const clearHighlights = () => {
         if (!bodyRef.current) return;
@@ -625,8 +861,8 @@ function ResponsePanel({ response, error }: ResponsePanelProps) {
             <section className="response-panel panel response-panel--empty">
                 <div className="response-placeholder">
                     <span>↗</span>
-                    <h2>Response akan tampil di sini</h2>
-                    <p>Lengkapi request, lalu tekan Send.</p>
+                    <h2>Response will appear here</h2>
+                    <p>Configure the request and click Send.</p>
                 </div>
             </section>
         );
@@ -667,6 +903,11 @@ function ResponsePanel({ response, error }: ResponsePanelProps) {
                         Headers ({response.headers.length})
                     </button>
                 )}
+                {responseSchema && (
+                    <button className={tab === 'schema' ? 'tab--active' : ''} type="button" onClick={() => setTab('schema')}>
+                        Schema
+                    </button>
+                )}
             </div>
             {tab === 'body' && (
                 <div className="response-search">
@@ -675,12 +916,21 @@ function ResponsePanel({ response, error }: ResponsePanelProps) {
                         <input
                             value={search}
                             onChange={(event) => setSearch(event.target.value)}
-                            placeholder="Cari di response body"
+                            placeholder="Search response body"
                         />
                     </label>
                     <span>{search ? `${matches.length ? activeMatch + 1 : 0}/${matches.length}` : ''}</span>
-                    <button type="button" onClick={() => moveMatch(-1)} disabled={!matches.length} aria-label="Hasil sebelumnya">↑</button>
-                    <button type="button" onClick={() => moveMatch(1)} disabled={!matches.length} aria-label="Hasil berikutnya">↓</button>
+                    <button type="button" onClick={() => moveMatch(-1)} disabled={!matches.length} aria-label="Previous match">↑</button>
+                    <button type="button" onClick={() => moveMatch(1)} disabled={!matches.length} aria-label="Next match">↓</button>
+                    
+                    <div className="response-actions">
+                        <button type="button" className="response-action-btn" onClick={handleCopy}>
+                            {copiedResponse ? 'Copied!' : 'Copy'}
+                        </button>
+                        <button type="button" className="response-action-btn" onClick={handleDownload}>
+                            Download
+                        </button>
+                    </div>
                 </div>
             )}
             {response && (
@@ -697,6 +947,10 @@ function ResponsePanel({ response, error }: ResponsePanelProps) {
                     ) : (
                         <pre className="response-body" ref={bodyRef}>{response.body}</pre>
                     )
+                ) : tab === 'schema' && responseSchema ? (
+                    <div className="schema-container" style={{ padding: '1rem' }}>
+                        <SchemaVisualizer schema={responseSchema} specification={operation?.specification} />
+                    </div>
                 ) : (
                     <div className="response-headers">
                         {response.headers.map(([name, value]) => (
@@ -712,6 +966,96 @@ function ResponsePanel({ response, error }: ResponsePanelProps) {
     );
 }
 
+function EnvModal({ isOpen, env, onClose, onSave }: { isOpen: boolean; env: Record<string, string>; onClose: () => void; onSave: (newEnv: Record<string, string>) => void }) {
+    const [localVars, setLocalVars] = useState<{ id: string; name: string; value: string }[]>(() => {
+        return Object.entries(env).map(([name, value]) => ({ id: crypto.randomUUID(), name, value }));
+    });
+
+    useEffect(() => {
+        if (isOpen) {
+            setLocalVars(Object.entries(env).map(([name, value]) => ({ id: crypto.randomUUID(), name, value })));
+        }
+    }, [isOpen, env]);
+
+    if (!isOpen) return null;
+
+    const handleSave = () => {
+        const updatedEnv: Record<string, string> = {};
+        localVars.forEach((v) => {
+            const name = v.name.trim();
+            if (name) {
+                updatedEnv[name] = v.value;
+            }
+        });
+        onSave(updatedEnv);
+        onClose();
+    };
+
+    const addVar = () => {
+        setLocalVars([...localVars, { id: crypto.randomUUID(), name: '', value: '' }]);
+    };
+
+    const updateVar = (id: string, field: 'name' | 'value', val: string) => {
+        setLocalVars(localVars.map((v) => v.id === id ? { ...v, [field]: val } : v));
+    };
+
+    const deleteVar = (id: string) => {
+        setLocalVars(localVars.filter((v) => v.id !== id));
+    };
+
+    return (
+        <div className="env-modal-backdrop" onClick={onClose}>
+            <div className="env-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="env-modal__header">
+                    <h2>Environment Variables</h2>
+                    <button type="button" className="env-modal__close-btn" onClick={onClose}>&times;</button>
+                </div>
+                <div className="env-modal__body">
+                    <p className="env-modal__help">
+                        Define variables to reference in URL, query parameters, headers, or request body using double curly braces (e.g. <code>{"{{"}my_variable{"}}"}</code>).
+                    </p>
+                    <div className="env-vars-list">
+                        <div className="env-vars-header">
+                            <span>Key</span>
+                            <span>Value</span>
+                            <span />
+                        </div>
+                        {localVars.map((v) => (
+                            <div className="env-vars-row" key={v.id}>
+                                <input
+                                    type="text"
+                                    value={v.name}
+                                    onChange={(e) => updateVar(v.id, 'name', e.target.value)}
+                                    placeholder="e.g. token"
+                                />
+                                <input
+                                    type="text"
+                                    value={v.value}
+                                    onChange={(e) => updateVar(v.id, 'value', e.target.value)}
+                                    placeholder="value"
+                                />
+                                <button type="button" className="env-var-delete" onClick={() => deleteVar(v.id)}>
+                                    &times;
+                                </button>
+                            </div>
+                        ))}
+                        {localVars.length === 0 && (
+                            <div className="env-vars-empty">No variables defined. Click the button below to add one.</div>
+                        )}
+                    </div>
+                    <button type="button" className="env-vars-add" onClick={addVar}>
+                        + Add Variable
+                    </button>
+                </div>
+                <div className="env-modal__footer">
+                    <button type="button" className="env-modal-btn env-modal-btn--secondary" onClick={onClose}>Cancel</button>
+                    <button type="button" className="env-modal-btn env-modal-btn--primary" onClick={handleSave}>Save Changes</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 interface ThemeToggleProps {
     theme: string;
     onChange: (theme: string) => void;
@@ -723,8 +1067,8 @@ function ThemeToggle({ theme, onChange }: ThemeToggleProps) {
             type="button"
             className="theme-toggle"
             onClick={() => onChange(theme === 'dark' ? 'light' : 'dark')}
-            aria-label="Ubah tema"
-            title={theme === 'dark' ? 'Mode Terang' : 'Mode Gelap'}
+            aria-label="Toggle theme"
+            title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
         >
             {theme === 'dark' ? '☀️' : '🌙'}
         </button>
@@ -756,10 +1100,10 @@ function HistoryDrawer({ history, onSelect, onClear }: HistoryDrawerProps) {
                             <MethodBadge method={item.method} />
                             <span>
                                 <strong>{item.path}</strong>
-                                <small>{item.status ?? 'Error'} · {new Date(item.createdAt).toLocaleString('id-ID')}</small>
+                                <small>{item.status ?? 'Error'} · {new Date(item.createdAt).toLocaleString('en-US')}</small>
                             </span>
                         </button>
-                    )) : <p>Belum ada request.</p>}
+                    )) : <p>No recent requests.</p>}
                 </div>
             )}
         </div>
@@ -773,6 +1117,24 @@ function ApiWorkspace({ specification }: { specification: any }) {
     const [request, setRequest] = useState<RequestState>(() => operations[0] ? createInitialRequest(operations[0], getServerUrl(specification)) : {
         baseUrl: '', path: [], query: [], headers: [], authType: 'bearer', contentType: 'application/json', body: '', files: []
     });
+    const [env, setEnv] = useState<Record<string, string>>(() => {
+        try {
+            const stored = localStorage.getItem('larafeel-env-variables');
+            return stored ? JSON.parse(stored) : {};
+        } catch {
+            return {};
+        }
+    });
+    const [showEnvModal, setShowEnvModal] = useState(false);
+
+    const saveEnv = (newEnv: Record<string, string>) => {
+        setEnv(newEnv);
+        try {
+            localStorage.setItem('larafeel-env-variables', JSON.stringify(newEnv));
+        } catch {
+            // LocalStorage can be disabled
+        }
+    };
     const [token, setToken] = useState(() => loadStoredValue(storageKeys.token));
     const [response, setResponse] = useState<ResponseState | null>(null);
     const [requestError, setRequestError] = useState<string | null>(null);
@@ -861,7 +1223,11 @@ function ApiWorkspace({ specification }: { specification: any }) {
         }
     };
 
-    const createHistoryItem = (status: number | null): HistoryItem => ({
+    const createHistoryItem = (
+        status: number | null,
+        cachedResponse?: ResponseState | null,
+        cachedError?: string | null
+    ): HistoryItem => ({
         id: crypto.randomUUID(),
         operationId: selected?.id || '',
         method: selected?.method || '',
@@ -870,6 +1236,8 @@ function ApiWorkspace({ specification }: { specification: any }) {
         createdAt: Date.now(),
         request: structuredClone(request),
         token,
+        cachedResponse,
+        cachedError,
     });
 
     const restoreHistoryItem = (item: HistoryItem) => {
@@ -883,8 +1251,17 @@ function ApiWorkspace({ specification }: { specification: any }) {
         if (typeof item.token === 'string') {
             saveToken(item.token);
         }
-        setResponse(null);
-        setRequestError(null);
+        
+        if (item.cachedResponse) {
+            setResponse(item.cachedResponse);
+            setRequestError(null);
+        } else if (item.cachedError) {
+            setResponse(null);
+            setRequestError(item.cachedError);
+        } else {
+            setResponse(null);
+            setRequestError(null);
+        }
     };
 
     const sendRequest = async () => {
@@ -894,7 +1271,7 @@ function ApiWorkspace({ specification }: { specification: any }) {
         setResponse(null);
 
         try {
-            const prepared = buildRequest(selected, request, token);
+            const prepared = buildRequest(selected, request, token, env);
             const startedAt = performance.now();
             const result = await fetch(prepared.url, prepared.options);
             const rawBody = await result.text();
@@ -905,17 +1282,18 @@ function ApiWorkspace({ specification }: { specification: any }) {
                 status: result.status,
                 statusText: result.statusText,
                 duration,
-                size: `${new Blob([rawBody]).size.toLocaleString('id-ID')} B`,
+                size: `${new Blob([rawBody]).size.toLocaleString('en-US')} B`,
                 headers: getResponseHeaders(result.headers),
                 body: parsedBody.text,
                 json: parsedBody.json,
+                contentType: result.headers.get('content-type') || '',
             };
 
             setResponse(responseData);
-            saveHistory(createHistoryItem(result.status));
+            saveHistory(createHistoryItem(result.status, responseData, null));
         } catch (error: any) {
             setRequestError(error.message);
-            saveHistory(createHistoryItem(null));
+            saveHistory(createHistoryItem(null, null, error.message));
         } finally {
             setSending(false);
         }
@@ -942,7 +1320,7 @@ function ApiWorkspace({ specification }: { specification: any }) {
                                     className="sidebar-toggle sidebar-toggle--open"
                                     type="button"
                                     onClick={toggleSidebar}
-                                    aria-label="Buka sidebar"
+                                    aria-label="Open sidebar"
                                     aria-expanded="false"
                                 >
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
@@ -958,6 +1336,18 @@ function ApiWorkspace({ specification }: { specification: any }) {
                         )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                        <button
+                            type="button"
+                            className="variables-btn"
+                            onClick={() => setShowEnvModal(true)}
+                            aria-label="Manage environment variables"
+                            title="Environment Variables"
+                        >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                                <circle cx="12" cy="12" r="3"></circle>
+                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                            </svg>
+                        </button>
                         <ThemeToggle theme={theme} onChange={setTheme} />
                         <HistoryDrawer
                             history={history}
@@ -980,16 +1370,18 @@ function ApiWorkspace({ specification }: { specification: any }) {
                             onTokenChange={saveToken}
                             onSend={sendRequest}
                             sending={sending}
+                            env={env}
                         />
                     ) : (
                         <div className="panel" style={{ padding: '2rem', textAlign: 'center', color: '#888' }}>
-                            <h2>Tidak ada endpoint yang dipilih</h2>
-                            <p>Silakan buat route API di Laravel atau pilih endpoint dari sidebar.</p>
+                            <h2>No endpoint selected</h2>
+                            <p>Please create API routes in Laravel or select an endpoint from the sidebar.</p>
                         </div>
                     )}
-                    <ResponsePanel response={response} error={requestError} />
+                    <ResponsePanel response={response} error={requestError} operation={selected} />
                 </div>
             </section>
+            <EnvModal isOpen={showEnvModal} env={env} onClose={() => setShowEnvModal(false)} onSave={saveEnv} />
         </main>
     );
 }
@@ -1023,9 +1415,9 @@ function ApiDocumentation() {
             <main className="docs-error">
                 <section>
                     <p>IHC ONE API</p>
-                    <h1>Dokumentasi tidak dapat dimuat</h1>
+                    <h1>Documentation could not be loaded</h1>
                     <span>{error}</span>
-                    <button type="button" onClick={() => window.location.reload()}>Muat ulang</button>
+                    <button type="button" onClick={() => window.location.reload()}>Reload</button>
                 </section>
             </main>
         );
@@ -1035,7 +1427,7 @@ function ApiDocumentation() {
         return (
             <main className="docs-loading">
                 <p>
-                    <strong className="loading-text">Sedang Menyiapkan</strong>
+                    <strong className="loading-text">Preparing Documentation</strong>
                     <span className="loading-dots" aria-hidden="true">
                         <i>.</i><i>.</i><i>.</i>
                     </span>
