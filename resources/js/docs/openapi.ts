@@ -1,20 +1,65 @@
+export interface RequestRow {
+    id: string;
+    name: string;
+    value: string;
+    example: string;
+    enabled: boolean;
+    required: boolean;
+    locked: boolean;
+}
+
+export interface FileRow {
+    id: string;
+    name: string;
+    file: File | null;
+    enabled: boolean;
+    required: boolean;
+    locked: boolean;
+}
+
+export interface Operation {
+    id: string;
+    method: string;
+    path: string;
+    tag: string;
+    summary: string;
+    description: string;
+    operationId: string;
+    parameters: any[];
+    requestBody: any;
+    contentTypes: string[];
+    bodyExamples: Record<string, any>;
+    specification: any;
+}
+
+export interface RequestState {
+    baseUrl: string;
+    path: RequestRow[];
+    query: RequestRow[];
+    headers: RequestRow[];
+    authType: string;
+    contentType: string;
+    body: string;
+    files: FileRow[];
+}
+
 const supportedMethods = ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'];
 
-function resolveReference(specification, value) {
+function resolveReference(specification: any, value: any): any {
     if (!value?.$ref?.startsWith('#/')) return value;
 
     return value.$ref
         .slice(2)
         .split('/')
-        .reduce((current, segment) => current?.[segment.replaceAll('~1', '/').replaceAll('~0', '~')], specification);
+        .reduce((current: any, segment: string) => current?.[segment.replaceAll('~1', '/').replaceAll('~0', '~')], specification);
 }
 
-function resolveSchema(specification, schema, depth = 0) {
+function resolveSchema(specification: any, schema: any, depth = 0): any {
     if (!schema || depth > 8) return schema;
     const resolved = resolveReference(specification, schema);
 
     if (resolved?.allOf) {
-        return resolved.allOf.reduce((result, item) => {
+        return resolved.allOf.reduce((result: any, item: any) => {
             const part = resolveSchema(specification, item, depth + 1);
             return {
                 ...result,
@@ -28,7 +73,7 @@ function resolveSchema(specification, schema, depth = 0) {
     return resolved;
 }
 
-function schemaExample(specification, schema, depth = 0) {
+function schemaExample(specification: any, schema: any, depth = 0): any {
     const resolved = resolveSchema(specification, schema, depth);
     if (!resolved || depth > 6) return null;
     if (resolved.example !== undefined) return resolved.example;
@@ -37,7 +82,7 @@ function schemaExample(specification, schema, depth = 0) {
     if (resolved.enum?.length) return resolved.enum[0];
 
     const type = Array.isArray(resolved.type)
-        ? resolved.type.find((item) => item !== 'null')
+        ? resolved.type.find((item: any) => item !== 'null')
         : resolved.type;
 
     if (type === 'object' || resolved.properties) {
@@ -58,7 +103,7 @@ function schemaExample(specification, schema, depth = 0) {
     return '';
 }
 
-function makeParameterRow(parameter, specification) {
+function makeParameterRow(parameter: any, specification: any): RequestRow {
     const resolved = resolveReference(specification, parameter);
     const schema = resolveSchema(specification, resolved?.schema);
     const example = resolved?.example
@@ -79,8 +124,8 @@ function makeParameterRow(parameter, specification) {
     };
 }
 
-export function getOperations(specification) {
-    const operations = [];
+export function getOperations(specification: any): Operation[] {
+    const operations: Operation[] = [];
 
     Object.entries(specification.paths ?? {}).forEach(([path, pathItemValue]) => {
         const pathItem = resolveReference(specification, pathItemValue);
@@ -107,7 +152,7 @@ export function getOperations(specification) {
                 bodyExamples: Object.fromEntries(contentTypes.map((contentType) => {
                     const media = content[contentType];
                     const example = media.example
-                        ?? Object.values(media.examples ?? {})[0]?.value
+                        ?? (Object.values(media.examples ?? {}) as any)[0]?.value
                         ?? schemaExample(specification, media.schema);
                     return [contentType, example];
                 })),
@@ -125,7 +170,7 @@ export function getOperations(specification) {
     });
 }
 
-export function getServerUrl(specification) {
+export function getServerUrl(specification: any): string {
     const configured = specification.servers?.[0]?.url;
     if (!configured) return `${window.location.origin}/api`;
 
@@ -140,7 +185,7 @@ export function getServerUrl(specification) {
     }
 }
 
-export function createInitialRequest(operation, baseUrl) {
+export function createInitialRequest(operation: Operation, baseUrl: string): RequestState {
     const parameters = operation.parameters.map((parameter) => {
         const resolved = resolveReference(operation.specification, parameter);
         return { location: resolved?.in, row: makeParameterRow(parameter, operation.specification) };
@@ -150,14 +195,14 @@ export function createInitialRequest(operation, baseUrl) {
         : operation.contentTypes[0] ?? 'application/json';
 
     // Auto-detect files for multipart/form-data
-    const files = [];
+    const files: FileRow[] = [];
     if (contentType === 'multipart/form-data' && operation.requestBody) {
         const content = operation.requestBody.content ?? {};
         const media = content['multipart/form-data'];
         if (media && media.schema) {
             const schema = resolveSchema(operation.specification, media.schema);
             if (schema && schema.properties) {
-                Object.entries(schema.properties).forEach(([name, property]) => {
+                Object.entries(schema.properties).forEach(([name, property]: [string, any]) => {
                     const resolvedProp = resolveSchema(operation.specification, property);
                     if (resolvedProp && (resolvedProp.format === 'binary' || resolvedProp.type === 'file' || (resolvedProp.type === 'string' && resolvedProp.format === 'binary'))) {
                         files.push({
@@ -198,7 +243,7 @@ export function createInitialRequest(operation, baseUrl) {
     };
 }
 
-function parseObjectBody(body, label) {
+function parseObjectBody(body: string, label: string): Record<string, any> {
     try {
         const parsed = JSON.parse(body || '{}');
         if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
@@ -210,14 +255,14 @@ function parseObjectBody(body, label) {
     }
 }
 
-function getCookie(name) {
+function getCookie(name: string): string | undefined {
     return document.cookie
         .split('; ')
         .find((item) => item.startsWith(`${name}=`))
         ?.slice(name.length + 1);
 }
 
-export function buildRequest(operation, request, token) {
+export function buildRequest(operation: Operation, request: RequestState, token: string): { url: string; options: RequestInit } {
     const missingPath = request.path.find((row) => row.required && !row.value);
     if (missingPath) throw new Error(`Path variable "${missingPath.name}" wajib diisi.`);
     const missingQuery = request.query.find((row) => row.required && (!row.enabled || !row.value));
@@ -246,7 +291,7 @@ export function buildRequest(operation, request, token) {
         headers.set('X-XSRF-TOKEN', decodeURIComponent(xsrfToken));
     }
 
-    const options = {
+    const options: RequestInit = {
         method: operation.method,
         headers,
         credentials: 'include',
@@ -268,7 +313,7 @@ export function buildRequest(operation, request, token) {
                 });
             }
             options.body = data;
-        } else if (operation.requestBody && request.body.trim()) {
+        } else if (request.contentType === 'application/x-www-form-urlencoded' && request.body.trim()) {
             const data = new URLSearchParams();
             Object.entries(parseObjectBody(request.body, 'Form body')).forEach(([name, value]) => {
                 data.append(name, typeof value === 'object' ? JSON.stringify(value) : String(value));
@@ -277,7 +322,7 @@ export function buildRequest(operation, request, token) {
             options.body = data;
         } else {
             headers.set('Content-Type', request.contentType);
-            if (request.contentType.includes('json')) JSON.parse(request.body);
+            if (request.contentType.includes('json') && request.body.trim()) JSON.parse(request.body);
             options.body = request.body;
         }
     }
@@ -285,7 +330,7 @@ export function buildRequest(operation, request, token) {
     return { url: url.toString(), options };
 }
 
-export function formatBody(value) {
+export function formatBody(value: string): string {
     try {
         return JSON.stringify(JSON.parse(value), null, 2);
     } catch {
@@ -293,7 +338,7 @@ export function formatBody(value) {
     }
 }
 
-export function parseResponseBody(value, contentType = '') {
+export function parseResponseBody(value: string, contentType: string = ''): { text: string; json: any } {
     if (!value) return { text: '(empty response)', json: null };
     if (contentType?.includes('json')) {
         try {
@@ -310,6 +355,6 @@ export function parseResponseBody(value, contentType = '') {
     return { text: value, json: null };
 }
 
-export function getResponseHeaders(headers) {
+export function getResponseHeaders(headers: Headers): [string, string][] {
     return [...headers.entries()].sort(([left], [right]) => left.localeCompare(right));
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { allExpanded, darkStyles, JsonView } from 'react-json-view-lite';
+import { allExpanded, JsonView } from 'react-json-view-lite';
 import 'react-json-view-lite/dist/index.css';
 import {
     buildRequest,
@@ -10,13 +10,29 @@ import {
     getResponseHeaders,
     getServerUrl,
     parseResponseBody,
+    Operation,
+    RequestRow,
+    RequestState
 } from './openapi';
 import './styles.css';
 
 const openApiUrl = '/docs/api.json';
 const transparentDarkJsonStyles = {
-    ...darkStyles,
-    container: 'json-view-transparent',
+    container: 'larafeel-json-container',
+    basicChildStyle: 'larafeel-json-child',
+    label: 'larafeel-json-label',
+    clickableLabel: 'larafeel-json-clickable-label',
+    nullValue: 'larafeel-json-null',
+    undefinedValue: 'larafeel-json-undefined',
+    stringValue: 'larafeel-json-string',
+    booleanValue: 'larafeel-json-boolean',
+    numberValue: 'larafeel-json-number',
+    otherValue: 'larafeel-json-other',
+    punctuation: 'larafeel-json-punctuation',
+    collapseIcon: 'larafeel-json-collapse-icon',
+    expandIcon: 'larafeel-json-expand-icon',
+    collapsedContent: 'larafeel-json-collapsed-content',
+    noQuotesForStringValues: false,
 };
 
 const storageKeys = {
@@ -25,7 +41,7 @@ const storageKeys = {
     sidebar: 'ihc-api-client-sidebar',
 };
 
-function loadStoredValue(key, fallback = '') {
+function loadStoredValue(key: string, fallback = ''): string {
     try {
         return localStorage.getItem(key) ?? fallback;
     } catch {
@@ -33,7 +49,18 @@ function loadStoredValue(key, fallback = '') {
     }
 }
 
-function loadHistory() {
+interface HistoryItem {
+    id: string;
+    operationId: string;
+    method: string;
+    path: string;
+    status: number | null;
+    createdAt: number;
+    request: RequestState;
+    token: string;
+}
+
+function loadHistory(): HistoryItem[] {
     try {
         return JSON.parse(localStorage.getItem(storageKeys.history) ?? '[]');
     } catch {
@@ -41,11 +68,22 @@ function loadHistory() {
     }
 }
 
-function MethodBadge({ method }) {
+function MethodBadge({ method }: { method: string }) {
     return <span className={`method method--${method.toLowerCase()}`}>{method}</span>;
 }
 
-function Sidebar({ groups, selectedId, onSelect, search, onSearch, operationCount, onClose, version }) {
+interface SidebarProps {
+    groups: [string, Operation[]][];
+    selectedId?: string;
+    onSelect: (operation: Operation) => void;
+    search: string;
+    onSearch: (value: string) => void;
+    operationCount: number;
+    onClose: () => void;
+    version: string;
+}
+
+function Sidebar({ groups, selectedId, onSelect, search, onSearch, operationCount, onClose, version }: SidebarProps) {
     return (
         <aside className="sidebar">
             <div className="brand">
@@ -54,7 +92,11 @@ function Sidebar({ groups, selectedId, onSelect, search, onSearch, operationCoun
                     <span>v{version}</span>
                 </div>
                 <button className="sidebar-toggle sidebar-toggle--close" type="button" onClick={onClose} aria-label="Tutup sidebar">
-                    ‹
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                        <rect width="18" height="18" x="3" y="3" rx="2" />
+                        <path d="M9 3v18" />
+                        <path d="m16 15-3-3 3-3" />
+                    </svg>
                 </button>
             </div>
 
@@ -96,8 +138,14 @@ function Sidebar({ groups, selectedId, onSelect, search, onSearch, operationCoun
     );
 }
 
-function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Nilai' }) {
-    const updateRow = (index, field, value) => {
+interface KeyValueEditorProps {
+    rows: RequestRow[];
+    onChange: (rows: RequestRow[]) => void;
+    valuePlaceholder?: string;
+}
+
+function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Nilai' }: KeyValueEditorProps) {
+    const updateRow = (index: number, field: keyof RequestRow, value: any) => {
         onChange(rows.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row));
     };
 
@@ -129,12 +177,12 @@ function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Nilai' }) {
                     <input
                         value={row.value}
                         onChange={(event) => {
-                            const value = event.target.value;
+                            const val = event.target.value;
                             onChange(rows.map((currentRow, rowIndex) => rowIndex === index
                                 ? {
                                     ...currentRow,
-                                    value,
-                                    enabled: value !== '' || currentRow.required,
+                                    value: val,
+                                    enabled: val !== '' || currentRow.required,
                                 }
                                 : currentRow));
                         }}
@@ -161,6 +209,7 @@ function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Nilai' }) {
                     enabled: true,
                     required: false,
                     locked: false,
+                    example: '',
                 }])}
             >
                 + Tambah baris
@@ -169,8 +218,19 @@ function KeyValueEditor({ rows, onChange, valuePlaceholder = 'Nilai' }) {
     );
 }
 
-function RequestPanel({ operation, request, onChange, token, onTokenChange, onSend, sending }) {
+interface RequestPanelProps {
+    operation: Operation;
+    request: RequestState;
+    onChange: (request: RequestState) => void;
+    token: string;
+    onTokenChange: (token: string) => void;
+    onSend: () => void;
+    sending: boolean;
+}
+
+function RequestPanel({ operation, request, onChange, token, onTokenChange, onSend, sending }: RequestPanelProps) {
     const [tab, setTab] = useState('params');
+    const [bodyMode, setBodyMode] = useState('raw');
     const requestBodyAvailable = Boolean(operation.requestBody);
     const tabCount = {
         params: request.path.length + request.query.length,
@@ -263,7 +323,7 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                     value={token}
                                     onChange={(event) => onTokenChange(event.target.value)}
                                     placeholder="Paste access token"
-                                    rows="5"
+                                    rows={5}
                                     spellCheck="false"
                                 />
                                 <small>Token disimpan hanya di localStorage browser ini.</small>
@@ -275,46 +335,94 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                 {tab === 'body' && (
                     <div className="body-editor">
                         <div className="body-editor__toolbar">
-                            <label>
-                                <span>Content-Type</span>
-                                <select
-                                    value={request.contentType}
-                                    onChange={(event) => {
-                                        const contentType = event.target.value;
-                                        const example = operation.bodyExamples[contentType];
-                                        onChange({
-                                            ...request,
-                                            contentType,
-                                            body: example === undefined || example === null
-                                                ? ''
-                                                : JSON.stringify(example, null, 2),
-                                        });
-                                    }}
-                                >
-                                    {operation.contentTypes.map((contentType) => (
-                                        <option key={contentType}>{contentType}</option>
-                                    ))}
-                                </select>
-                            </label>
+                            {operation.contentTypes.length > 1 ? (
+                                <label>
+                                    <span>Content-Type</span>
+                                    <select
+                                        value={request.contentType}
+                                        onChange={(event) => {
+                                            const contentType = event.target.value;
+                                            const example = operation.bodyExamples[contentType];
+                                            onChange({
+                                                ...request,
+                                                contentType,
+                                                body: example === undefined || example === null
+                                                    ? ''
+                                                    : JSON.stringify(example, null, 2),
+                                            });
+                                        }}
+                                    >
+                                        {operation.contentTypes.map((contentType) => (
+                                            <option key={contentType}>{contentType}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                            ) : (
+                                <div className="content-type-badge-container">
+                                    <span className="content-type-badge-label">Content-Type:</span>
+                                    <code className="content-type-badge-value">{request.contentType}</code>
+                                </div>
+                            )}
                             {request.contentType.includes('json') && (
-                                <button
-                                    type="button"
-                                    onClick={() => onChange({ ...request, body: formatBody(request.body) })}
-                                >
-                                    Format JSON
-                                </button>
+                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                    <div className="segmented-control">
+                                        <button
+                                            type="button"
+                                            className={bodyMode === 'raw' ? 'active' : ''}
+                                            onClick={() => setBodyMode('raw')}
+                                        >
+                                            Raw
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className={bodyMode === 'preview' ? 'active' : ''}
+                                            onClick={() => setBodyMode('preview')}
+                                        >
+                                            Preview
+                                        </button>
+                                    </div>
+                                </div>
                             )}
                         </div>
-                        <textarea
-                            className="code-editor"
-                            value={request.body}
-                            onChange={(event) => onChange({ ...request, body: event.target.value })}
-                            rows="18"
-                            spellCheck="false"
-                            placeholder={request.contentType === 'multipart/form-data'
-                                ? 'Gunakan JSON object. Nilai akan dikirim sebagai FormData.'
-                                : 'Request body'}
-                        />
+                        {bodyMode === 'preview' && request.contentType.includes('json') ? (
+                            (() => {
+                                try {
+                                    const parsed = JSON.parse(request.body || '{}');
+                                    return (
+                                        <div className="response-json" style={{ minHeight: '18rem', borderRadius: '0.55rem' }}>
+                                            <JsonView
+                                                data={parsed}
+                                                shouldExpandNode={allExpanded}
+                                                style={transparentDarkJsonStyles}
+                                                clickToExpandNode
+                                            />
+                                        </div>
+                                    );
+                                } catch (e: any) {
+                                    return (
+                                        <div className="response-body response-body--error" style={{ minHeight: '18rem', borderRadius: '0.55rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                            JSON tidak valid: {e.message}
+                                        </div>
+                                    );
+                                }
+                            })()
+                        ) : (
+                            <textarea
+                                className="code-editor"
+                                value={request.body}
+                                onChange={(event) => onChange({ ...request, body: event.target.value })}
+                                onBlur={() => {
+                                    if (request.contentType.includes('json')) {
+                                        onChange({ ...request, body: formatBody(request.body) });
+                                    }
+                                }}
+                                rows={18}
+                                spellCheck="false"
+                                placeholder={request.contentType === 'multipart/form-data'
+                                    ? 'Gunakan JSON object. Nilai akan dikirim sebagai FormData.'
+                                    : 'Request body'}
+                            />
+                        )}
                         {request.contentType === 'multipart/form-data' && (
                             <div className="editor-section" style={{ marginTop: '1.5rem' }}>
                                 <h2>File Attachments (Multipart)</h2>
@@ -390,7 +498,7 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
                                                 ...request,
                                                 files: [
                                                     ...(request.files ?? []),
-                                                    { id: crypto.randomUUID(), name: '', file: null, enabled: true },
+                                                    { id: crypto.randomUUID(), name: '', file: null, enabled: true, required: false, locked: false },
                                                 ],
                                             });
                                         }}
@@ -407,18 +515,34 @@ function RequestPanel({ operation, request, onChange, token, onTokenChange, onSe
     );
 }
 
-function ResponsePanel({ response, error }) {
+interface ResponseState {
+    ok: boolean;
+    status: number;
+    statusText: string;
+    duration: number;
+    size: string;
+    headers: [string, string][];
+    body: string;
+    json: any;
+}
+
+interface ResponsePanelProps {
+    response: ResponseState | null;
+    error: string | null;
+}
+
+function ResponsePanel({ response, error }: ResponsePanelProps) {
     const [tab, setTab] = useState('body');
     const [search, setSearch] = useState('');
-    const [matches, setMatches] = useState([]);
+    const [matches, setMatches] = useState<HTMLElement[]>([]);
     const [activeMatch, setActiveMatch] = useState(0);
-    const bodyRef = useRef(null);
+    const bodyRef = useRef<any>(null);
 
     const clearHighlights = () => {
         if (!bodyRef.current) return;
 
-        bodyRef.current.querySelectorAll('mark.response-match').forEach((mark) => {
-            mark.replaceWith(document.createTextNode(mark.textContent));
+        bodyRef.current.querySelectorAll('mark.response-match').forEach((mark: any) => {
+            mark.replaceWith(document.createTextNode(mark.textContent || ''));
         });
         bodyRef.current.normalize();
     };
@@ -442,21 +566,21 @@ function ResponsePanel({ response, error }) {
         const root = bodyRef.current;
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
             acceptNode(node) {
-                if (!node.nodeValue?.trim() || node.parentElement?.closest('mark.response-match')) {
+                if (!node.nodeValue?.trim() || (node.parentElement as HTMLElement)?.closest('mark.response-match')) {
                     return NodeFilter.FILTER_REJECT;
                 }
                 return NodeFilter.FILTER_ACCEPT;
             },
         });
-        const nodes = [];
-        let currentNode;
-        while ((currentNode = walker.nextNode())) nodes.push(currentNode);
+        const nodes: Text[] = [];
+        let currentNode: Node | null;
+        while ((currentNode = walker.nextNode())) nodes.push(currentNode as Text);
 
         const normalizedTerm = term.toLocaleLowerCase();
-        const found = [];
+        const found: HTMLElement[] = [];
 
         nodes.forEach((node) => {
-            const text = node.nodeValue;
+            const text = node.nodeValue || '';
             const normalizedText = text.toLocaleLowerCase();
             let cursor = 0;
             let matchIndex = normalizedText.indexOf(normalizedTerm, cursor);
@@ -489,7 +613,7 @@ function ResponsePanel({ response, error }) {
         });
     }, [activeMatch, matches]);
 
-    const moveMatch = (direction) => {
+    const moveMatch = (direction: number) => {
         if (!matches.length) return;
         const next = (activeMatch + direction + matches.length) % matches.length;
         setActiveMatch(next);
@@ -524,21 +648,25 @@ function ResponsePanel({ response, error }) {
         <section className="response-panel panel">
             <div className="response-title">
                 <h2>Response</h2>
-                <div>
-                    <span className={`status ${response.ok ? 'status--ok' : 'status--error'}`}>
-                        {response.status} {response.statusText}
-                    </span>
-                    <span>{response.duration} ms</span>
-                    <span>{response.size}</span>
-                </div>
+                {response && (
+                    <div>
+                        <span className={`status ${response.ok ? 'status--ok' : 'status--error'}`}>
+                            {response.status} {response.statusText}
+                        </span>
+                        <span>{response.duration} ms</span>
+                        <span>{response.size}</span>
+                    </div>
+                )}
             </div>
             <div className="tabs">
                 <button className={tab === 'body' ? 'tab--active' : ''} type="button" onClick={() => setTab('body')}>
                     Body
                 </button>
-                <button className={tab === 'headers' ? 'tab--active' : ''} type="button" onClick={() => setTab('headers')}>
-                    Headers ({response.headers.length})
-                </button>
+                {response && (
+                    <button className={tab === 'headers' ? 'tab--active' : ''} type="button" onClick={() => setTab('headers')}>
+                        Headers ({response.headers.length})
+                    </button>
+                )}
             </div>
             {tab === 'body' && (
                 <div className="response-search">
@@ -555,34 +683,61 @@ function ResponsePanel({ response, error }) {
                     <button type="button" onClick={() => moveMatch(1)} disabled={!matches.length} aria-label="Hasil berikutnya">↓</button>
                 </div>
             )}
-            {tab === 'body' ? (
-                response.json !== null ? (
-                    <div className="response-json" ref={bodyRef}>
-                        <JsonView
-                            data={response.json}
-                            shouldExpandNode={allExpanded}
-                            style={transparentDarkJsonStyles}
-                            clickToExpandNode
-                        />
-                    </div>
-                ) : (
-                    <pre className="response-body" ref={bodyRef}>{response.body}</pre>
-                )
-            ) : (
-                <div className="response-headers">
-                    {response.headers.map(([name, value]) => (
-                        <div key={name}>
-                            <code>{name}</code>
-                            <span>{value}</span>
+            {response && (
+                tab === 'body' ? (
+                    response.json !== null ? (
+                        <div className="response-json" ref={bodyRef}>
+                            <JsonView
+                                data={response.json}
+                                shouldExpandNode={allExpanded}
+                                style={transparentDarkJsonStyles}
+                                clickToExpandNode
+                            />
                         </div>
-                    ))}
-                </div>
+                    ) : (
+                        <pre className="response-body" ref={bodyRef}>{response.body}</pre>
+                    )
+                ) : (
+                    <div className="response-headers">
+                        {response.headers.map(([name, value]) => (
+                            <div key={name}>
+                                <code>{name}</code>
+                                <span>{value}</span>
+                            </div>
+                        ))}
+                    </div>
+                )
             )}
         </section>
     );
 }
 
-function HistoryDrawer({ history, onSelect, onClear }) {
+interface ThemeToggleProps {
+    theme: string;
+    onChange: (theme: string) => void;
+}
+
+function ThemeToggle({ theme, onChange }: ThemeToggleProps) {
+    return (
+        <button
+            type="button"
+            className="theme-toggle"
+            onClick={() => onChange(theme === 'dark' ? 'light' : 'dark')}
+            aria-label="Ubah tema"
+            title={theme === 'dark' ? 'Mode Terang' : 'Mode Gelap'}
+        >
+            {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
+    );
+}
+
+interface HistoryDrawerProps {
+    history: HistoryItem[];
+    onSelect: (item: HistoryItem) => void;
+    onClear: () => void;
+}
+
+function HistoryDrawer({ history, onSelect, onClear }: HistoryDrawerProps) {
     const [open, setOpen] = useState(false);
 
     return (
@@ -611,19 +766,43 @@ function HistoryDrawer({ history, onSelect, onClear }) {
     );
 }
 
-function ApiWorkspace({ specification }) {
+function ApiWorkspace({ specification }: { specification: any }) {
     const operations = useMemo(() => getOperations(specification), [specification]);
-    const [selected, setSelected] = useState(operations[0] || null);
+    const [selected, setSelected] = useState<Operation | null>(operations[0] || null);
     const [search, setSearch] = useState('');
-    const [request, setRequest] = useState(() => operations[0] ? createInitialRequest(operations[0], getServerUrl(specification)) : null);
+    const [request, setRequest] = useState<RequestState>(() => operations[0] ? createInitialRequest(operations[0], getServerUrl(specification)) : {
+        baseUrl: '', path: [], query: [], headers: [], authType: 'bearer', contentType: 'application/json', body: '', files: []
+    });
     const [token, setToken] = useState(() => loadStoredValue(storageKeys.token));
-    const [response, setResponse] = useState(null);
-    const [requestError, setRequestError] = useState(null);
+    const [response, setResponse] = useState<ResponseState | null>(null);
+    const [requestError, setRequestError] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
-    const [history, setHistory] = useState(loadHistory);
+    const [history, setHistory] = useState<HistoryItem[]>(loadHistory);
     const [sidebarOpen, setSidebarOpen] = useState(() => loadStoredValue(storageKeys.sidebar, 'open') !== 'closed');
+    const [theme, setTheme] = useState(() => {
+        const stored = localStorage.getItem('larafeel-theme');
+        if (stored) return stored;
 
-    const filteredGroups = useMemo(() => {
+        const configTheme = specification.ui?.theme || 'system';
+        if (configTheme === 'system') {
+            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        return configTheme;
+    });
+
+    useEffect(() => {
+        const root = document.documentElement;
+        if (theme === 'dark') {
+            root.classList.add('dark');
+            root.setAttribute('data-theme', 'dark');
+        } else {
+            root.classList.remove('dark');
+            root.setAttribute('data-theme', 'light');
+        }
+        localStorage.setItem('larafeel-theme', theme);
+    }, [theme]);
+
+    const filteredGroups = useMemo((): [string, Operation[]][] => {
         const term = search.trim().toLowerCase();
         const filtered = term
             ? operations.filter((operation) => [
@@ -635,7 +814,7 @@ function ApiWorkspace({ specification }) {
             ].some((value) => value?.toLowerCase().includes(term)))
             : operations;
 
-        const grouped = filtered.reduce((result, operation) => {
+        const grouped = filtered.reduce((result: Record<string, Operation[]>, operation) => {
             result[operation.tag] ??= [];
             result[operation.tag].push(operation);
             return result;
@@ -644,14 +823,14 @@ function ApiWorkspace({ specification }) {
         return Object.entries(grouped).sort(([left], [right]) => left.localeCompare(right));
     }, [operations, search]);
 
-    const chooseOperation = (operation) => {
+    const chooseOperation = (operation: Operation) => {
         setSelected(operation);
         setRequest(createInitialRequest(operation, request.baseUrl || getServerUrl(specification)));
         setResponse(null);
         setRequestError(null);
     };
 
-    const saveToken = (value) => {
+    const saveToken = (value: string) => {
         setToken(value);
         try {
             localStorage.setItem(storageKeys.token, value);
@@ -672,7 +851,7 @@ function ApiWorkspace({ specification }) {
         });
     };
 
-    const saveHistory = (item) => {
+    const saveHistory = (item: HistoryItem) => {
         const next = [item, ...history].slice(0, 20);
         setHistory(next);
         try {
@@ -682,18 +861,18 @@ function ApiWorkspace({ specification }) {
         }
     };
 
-    const createHistoryItem = (status) => ({
+    const createHistoryItem = (status: number | null): HistoryItem => ({
         id: crypto.randomUUID(),
-        operationId: selected.id,
-        method: selected.method,
-        path: selected.path,
+        operationId: selected?.id || '',
+        method: selected?.method || '',
+        path: selected?.path || '',
         status,
         createdAt: Date.now(),
         request: structuredClone(request),
         token,
     });
 
-    const restoreHistoryItem = (item) => {
+    const restoreHistoryItem = (item: HistoryItem) => {
         const operation = operations.find((candidate) => candidate.id === item.operationId);
         if (!operation) return;
 
@@ -709,6 +888,7 @@ function ApiWorkspace({ specification }) {
     };
 
     const sendRequest = async () => {
+        if (!selected) return;
         setSending(true);
         setRequestError(null);
         setResponse(null);
@@ -719,8 +899,8 @@ function ApiWorkspace({ specification }) {
             const result = await fetch(prepared.url, prepared.options);
             const rawBody = await result.text();
             const duration = Math.round(performance.now() - startedAt);
-            const parsedBody = parseResponseBody(rawBody, result.headers.get('content-type'));
-            const responseData = {
+            const parsedBody = parseResponseBody(rawBody, result.headers.get('content-type') || '');
+            const responseData: ResponseState = {
                 ok: result.ok,
                 status: result.status,
                 statusText: result.statusText,
@@ -733,7 +913,7 @@ function ApiWorkspace({ specification }) {
 
             setResponse(responseData);
             saveHistory(createHistoryItem(result.status));
-        } catch (error) {
+        } catch (error: any) {
             setRequestError(error.message);
             saveHistory(createHistoryItem(null));
         } finally {
@@ -765,7 +945,11 @@ function ApiWorkspace({ specification }) {
                                     aria-label="Buka sidebar"
                                     aria-expanded="false"
                                 >
-                                    ☰
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                                        <rect width="18" height="18" x="3" y="3" rx="2" />
+                                        <path d="M9 3v18" />
+                                        <path d="m14 9 3 3-3 3" />
+                                    </svg>
                                 </button>
                                 <span className="topbar__dot" />
                                 <strong>{specification.info?.title || 'API'}</strong>
@@ -773,14 +957,17 @@ function ApiWorkspace({ specification }) {
                             </>
                         )}
                     </div>
-                    <HistoryDrawer
-                        history={history}
-                        onSelect={restoreHistoryItem}
-                        onClear={() => {
-                            setHistory([]);
-                            localStorage.removeItem(storageKeys.history);
-                        }}
-                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                        <ThemeToggle theme={theme} onChange={setTheme} />
+                        <HistoryDrawer
+                            history={history}
+                            onSelect={restoreHistoryItem}
+                            onClear={() => {
+                                setHistory([]);
+                                localStorage.removeItem(storageKeys.history);
+                            }}
+                        />
+                    </div>
                 </header>
                 <div className="workspace__content">
                     {selected ? (
@@ -808,8 +995,8 @@ function ApiWorkspace({ specification }) {
 }
 
 function ApiDocumentation() {
-    const [specification, setSpecification] = useState(null);
-    const [error, setError] = useState(null);
+    const [specification, setSpecification] = useState<any>(null);
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -860,7 +1047,7 @@ function ApiDocumentation() {
     return <ApiWorkspace specification={specification} />;
 }
 
-createRoot(document.getElementById('docs-root')).render(
+createRoot(document.getElementById('docs-root')!).render(
     <React.StrictMode>
         <ApiDocumentation />
     </React.StrictMode>,

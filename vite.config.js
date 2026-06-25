@@ -9,7 +9,7 @@ export default defineConfig({
     },
     build: {
         lib: {
-            entry: resolve(__dirname, 'resources/js/docs/main.jsx'),
+            entry: resolve(__dirname, 'resources/js/docs/main.tsx'),
             name: 'Larafeel',
             formats: ['iife'],
             fileName: () => 'larafeel.js',
