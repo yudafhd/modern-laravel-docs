@@ -8,6 +8,8 @@
 
 Easily access your documentation page via the `/docs/larafeel` route!
 
+![Larafeel Dashboard](docs/images/dashboard.png)
+
 ---
 
 ## ✨ Key Features
