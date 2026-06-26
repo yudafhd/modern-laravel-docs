@@ -4,78 +4,78 @@
 [![Total Downloads](https://img.shields.io/packagist/dt/yudafhd/larafeel.svg?style=flat-square)](https://packagist.org/packages/yudafhd/larafeel)
 [![Software License](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat-square)](LICENSE)
 
-**Larafeel** adalah paket (package) Laravel yang dirancang untuk menghadirkan dashboard dokumentasi API interaktif yang modern dan responsif. Larafeel menggabungkan kemampuan **Scramble** untuk auto-generation dokumentasi OpenAPI (tanpa perlu anotasi manual PHPDoc) dengan antarmuka klien API (**React-based dashboard**) yang kaya fitur layaknya Postman atau Insomnia langsung di browser Anda.
+**Larafeel** is a Laravel package designed to deliver a modern, interactive, and responsive API documentation dashboard. By combining **Scramble**'s capability to auto-generate OpenAPI documentation (without requiring manual PHPDoc annotations) with a feature-rich, **React-based API client** UI, Larafeel brings Postman-like capabilities directly to your browser.
 
-Akses dokumentasi Anda dengan mudah melalui rute `/docs/larafeel`!
+Easily access your documentation page via the `/docs/larafeel` route!
 
 ---
 
-## ✨ Fitur Utama
+## ✨ Key Features
 
-- **⚡ Auto-Documentation (Scramble Integration):** Secara otomatis mendeteksi rute, request rules, dan response API Laravel Anda. Tidak perlu lagi menulis komentar PHPDoc yang panjang dan melelahkan.
-- **💻 Interactive API Client (Try It):** Uji endpoint Anda secara langsung dari dashboard. Mendukung parameter query, path variables, request body, headers, hingga upload file (multipart/form-data).
-- **🔑 Persistent Authorization:** Dukungan untuk Bearer Token, API Key (via Header atau Query), dan Basic Auth. Token Anda tersimpan dengan aman di `localStorage` sehingga Anda tidak perlu memasukkannya berulang kali.
-- **📜 Request History:** Menyimpan riwayat request API Anda di sidebar secara lokal, memudahkan Anda untuk memanggil ulang request sebelumnya dengan sekali klik.
-- **🛠️ Deep Schema Explorer:** Eksplorasi struktur data request dan response JSON secara interaktif menggunakan node tree viewer yang informatif.
-- **🎨 Code Snippet Generator:** Hasilkan kode integrasi instan untuk berbagai bahasa/library populer:
+- **⚡ Auto-Documentation (Scramble Integration):** Automatically detects your Laravel API routes, request rules, and responses. No more tedious PHPDoc writing.
+- **💻 Interactive API Client (Try It):** Test your endpoints directly from the dashboard. Supports query parameters, path variables, request bodies, custom headers, and file uploads (`multipart/form-data`).
+- **🔑 Persistent Authorization:** Support for Bearer Token, API Key (via Header or Query), and Basic Auth. Your credentials are saved securely in `localStorage` so you don't have to re-enter them constantly.
+- **📜 Request History:** Stores your API request history locally in the sidebar, allowing you to replay past requests with a single click.
+- **🛠️ Deep Schema Explorer:** Interactively explore your JSON request and response models with an intuitive node-tree schema viewer.
+- **🎨 Code Snippet Generator:** Instantly generate integration snippets for popular languages and tools:
   - `cURL`
   - `JavaScript` (Fetch API)
   - `Python` (Requests)
   - `PHP` (Guzzle)
-- **🌗 Theme Switcher:** Mendukung mode tampilan `Light`, `Dark`, atau sinkronisasi otomatis dengan `System`.
-- **🔒 Secure by Default:** Dokumentasi otomatis aktif di lingkungan `local` dan `development`. Untuk production, akses dilindungi menggunakan Laravel Gate (`viewApiDocs`).
+- **🌗 Theme Switcher:** Fully supports `Light`, `Dark`, or auto-syncing with `System` appearance.
+- **🔒 Secure by Default:** Documentation is automatically active in `local` and `development` environments. For production, restrict access using a standard Laravel Gate (`viewApiDocs`).
 
 ---
 
-## 🚀 Instalasi
+## 🚀 Installation
 
-Ikuti langkah-langkah mudah berikut untuk memasang Larafeel di proyek Laravel Anda:
+Install Larafeel in your Laravel project with these simple steps:
 
 ### 1. Install via Composer
-Tambahkan package ke proyek Anda menggunakan Composer:
+Add the package to your project:
 ```bash
 composer require yudafhd/larafeel
 ```
 
-### 2. Publish Konfigurasi
-Publish file konfigurasi `larafeel.php` untuk memodifikasi pengaturan bawaan:
+### 2. Publish Configuration
+Publish the `larafeel.php` configuration file to customize the default settings:
 ```bash
 php artisan vendor:publish --tag=larafeel-config
 ```
 
-### 3. Publish Asset Frontend
-Publish aset JavaScript dan CSS yang diperlukan oleh dashboard React:
+### 3. Publish Frontend Assets
+Publish the compiled JavaScript and CSS assets required for the React dashboard:
 ```bash
 php artisan vendor:publish --tag=laravel-assets
 ```
 
-Setelah selesai, buka browser Anda dan akses:
+Once installed, navigate to:
 ```
 http://localhost:8000/docs/larafeel
 ```
 
 ---
 
-## ⚙️ Konfigurasi (`config/larafeel.php`)
+## ⚙️ Configuration (`config/larafeel.php`)
 
-Setelah mempublikasikan konfigurasi, Anda dapat mengaturnya di file `config/larafeel.php`. Berikut opsi-opsi penting yang dapat disesuaikan:
+After publishing the configuration, you can adjust it in `config/larafeel.php`. Key options include:
 
-| Opsi | Default | Deskripsi |
-|------|---------|-----------|
-| `api_path` | `'api'` | Prefix rute Laravel yang akan dimasukkan ke dokumentasi API. |
-| `export_path` | `'api.json'` | Path di mana spesifikasi OpenAPI (JSON) akan diekspos (misal: `/docs/api.json`). |
-| `ui.title` | `'Larafeel'` | Judul halaman dokumentasi pada browser. |
-| `ui.theme` | `'system'` | Tema default dashboard (`light`, `dark`, atau `system`). |
-| `ui.layout` | `'responsive'` | Tata letak dashboard (`sidebar`, `responsive`, atau `stacked`). |
-| `ui.hide_try_it`| `false` | Set ke `true` untuk menyembunyikan fitur pengujian API client. |
+| Option | Default | Description |
+|------|---------|-------------|
+| `api_path` | `'api'` | The route prefix for the APIs you wish to document. |
+| `export_path` | `'api.json'` | The path where the generated OpenAPI JSON specification is exposed (e.g., `/docs/api.json`). |
+| `ui.title` | `'Larafeel'` | The title displayed on the documentation tab. |
+| `ui.theme` | `'system'` | The default theme (`light`, `dark`, or `system`). |
+| `ui.layout` | `'responsive'` | The layout style (`sidebar`, `responsive`, or `stacked`). |
+| `ui.hide_try_it`| `false` | Set to `true` to hide the API client "Try It" panel. |
 
 ---
 
-## 🔒 Kontrol Akses & Keamanan
+## 🔒 Access Control & Security
 
-Secara default, Larafeel mengizinkan akses tanpa batasan pada environment **`local`** dan **`development`**.
+By default, Larafeel permits access automatically in **`local`** and **`development`** environments.
 
-Untuk lingkungan produksi, Anda harus mendefinisikan Gate bernama `viewApiDocs` di dalam `App\Providers\AppServiceProvider.php` (Laravel 11+) atau `AuthServiceProvider.php` (Laravel 10) untuk mengontrol siapa saja yang boleh melihat dokumentasi API:
+For production, define a Laravel Gate named `viewApiDocs` in your `App\Providers\AppServiceProvider.php` (Laravel 11+) or `AuthServiceProvider.php` (Laravel 10) to control access to the API documentation:
 
 ```php
 use Illuminate\Support\Facades\Gate;
@@ -85,7 +85,7 @@ use Illuminate\Support\Facades\Gate;
  */
 public function boot(): void
 {
-    // Batasi akses hanya untuk pengguna admin yang terotentikasi
+    // Restrict access to authorized administrator users
     Gate::define('viewApiDocs', function ($user = null) {
         return optional($user)->is_admin;
     });
@@ -94,42 +94,42 @@ public function boot(): void
 
 ---
 
-## 🛠️ Pengembangan & Kustomisasi Aset Frontend
+## 🛠️ Frontend Assets Development
 
-Jika Anda ingin berkontribusi atau menyesuaikan antarmuka React dari dashboard Larafeel, Anda dapat memodifikasi file di dalam `resources/js/docs` dan membangun ulang asetnya:
+If you'd like to customize or contribute to the React interface of the Larafeel dashboard, you can build the assets locally:
 
 1. **Install Dependencies:**
    ```bash
    pnpm install
-   # atau menggunakan npm:
+   # or with npm:
    npm install
    ```
 
-2. **Jalankan Build Production:**
+2. **Run Production Build:**
    ```bash
    npm run build
    ```
-   *Perintah ini akan menggunakan Vite untuk mengompilasi JavaScript dan CSS ke direktori `resources/dist`.*
+   *This compiles the React entry point and CSS into `resources/dist` using Vite.*
 
-3. **Jalankan Watcher (Mode Development):**
+3. **Run Development Watcher:**
    ```bash
    npm run watch
    ```
 
-4. **Update Aset di Proyek Host:**
-   Jangan lupa untuk mempublikasikan kembali aset ke folder `public` proyek Laravel Anda setelah melakukan kompilasi ulang:
+4. **Update Host Project Assets:**
+   Publish the updated assets to your host Laravel project's public folder:
    ```bash
    php artisan vendor:publish --tag=laravel-assets --force
    ```
 
 ---
 
-## 📄 Lisensi
+## 📄 License
 
-Larafeel dilisensikan di bawah **[MIT License](LICENSE)**. Anda bebas menggunakan, memodifikasi, dan mendistribusikannya untuk proyek pribadi maupun komersial.
+Larafeel is open-source software licensed under the **[MIT License](LICENSE)**.
 
 ---
 
 <p align="center">
-  Dibuat dengan ❤️ oleh <a href="https://github.com/yudafhd">Yuda</a>
+  Made with ❤️ by <a href="https://github.com/yudafhd">Yuda</a>
 </p>
